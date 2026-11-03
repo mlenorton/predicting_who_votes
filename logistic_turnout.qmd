@@ -760,7 +760,7 @@ tidy(m_full, exponentiate = TRUE, conf.int = TRUE) %>%
 - Each odds ratio: **holding the other predictors constant**
 - **Married:** `r r2(exp(bm1["married"]))` alone → `r r2(exp(bf["married"]))` adjusted, so mostly **confounding**
 - **Party ID strength:** ×`r r2(exp(bf["pstrength"]))` odds per step (either party)
-- Strong partisan vs. independent: $e^{3\beta} \approx `r round(exp(3 * bf["pstrength"]))`\times$ the odds
+- Strong partisan vs. independent: $e^{3\beta} \approx `r round(exp(3 * bf["pstrength"]),2)`\times$ the odds
 
 ::: notes
 ~2 min. Answer to Activity A, Q2: party ID strength has the biggest effect. We use strength only, not which party, so the model is neutral about direction. These are associations in observational data, not causal effects.
@@ -841,7 +841,7 @@ lrt <- anova(m_ae, m_full, test = "Chisq")
 - **Deviance** $= -2\ell$ (where $\ell =$ log likelihood; lower is better)
 - **AIC** $= 2K -2\ell$ (i.e., penalizes parameters $K$)
 - **Likelihood ratio test** $= 2(\ell_{\text{full}} - \ell_{\text{reduced}})$ (drop in deviance; larger is better)
-- Compare `full` vs. `age + education` models: deviance drops `r round(lrt$Deviance[2])` on `r lrt$Df[2]` df, p `r format.pval(lrt[["Pr(>Chi)"]][2], eps = 0.001)`
+  - Compare `full` vs. `age + education` models: deviance drops `r round(lrt$Deviance[2])` on `r lrt$Df[2]` df, p `r format.pval(lrt[["Pr(>Chi)"]][2], eps = 0.001)`
 
 ::: notes
 ~2 min. The LRT is anova(m_ae, m_full, test = "Chisq"). McFadden's pseudo-R² is not comparable to linear-regression R²; 0.2–0.4 is considered a good fit.
@@ -868,6 +868,7 @@ ggplot(calib, aes(predicted, observed)) +
 ```
 :::
 ::: {.column width="45%"}
+- **Calibration**: The agreement between a model's predicted probabilities and the actual observed frequencies of an event
 - Split people into 8 groups by predicted probability
 - Compare observed vs. predicted share who voted
 - On the dashed line → observed = predicted → perfect calibration 
@@ -894,11 +895,89 @@ kable(cbind(` ` = c("Predicted: no", "Predicted: vote"), cmd), col.names = c("",
 
 <!-- - Accuracy `r pct(sum(diag(cm)) / sum(cm))`, but "everyone votes" gets `r pct(mean(vote$voted))` -->
 <!-- - Catches only `r pct(cm["no", "no"] / sum(cm[, "no"]))` of non-voters: the right cut-off depends on costs -->
-<!-- - **AUC = `r r2(auc)`**: a random voter outranks a random non-voter `r pct(auc)` of the time -->
+<!-- <!-- - **AUC = `r r2(auc)`**: a random voter outranks a random non-voter `r pct(auc)` of the time --> -->
 
 <!-- ::: notes -->
 <!-- ~2 min. For a campaign deciding whom to remind to vote, missing non-voters might be the costlier error, so it would use a higher cut-off. -->
 <!-- ::: -->
+
+## Classification
+
+:::: {.columns}
+::: {.column width="62%"}
+```{r}
+#| label: plot-classify
+#| echo: false
+#| fig-width: 6.6
+#| fig-height: 5
+cls <- pred %>% mutate(eta = qlogis(.fitted))
+xr <- range(cls$eta)
+ggplot(cls, aes(eta, .fitted)) +
+  annotate("rect", xmin = -Inf, xmax = Inf, ymin = 0.5, ymax = Inf, fill = col_vote, alpha = 0.10) +
+  annotate("rect", xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = 0.5, fill = col_no, alpha = 0.10) +
+  annotate("text", x = xr[1], y = 0.97, label = "Classified: will vote", hjust = 0,
+           colour = col_vote, fontface = "bold", size = 5.5) +
+  annotate("text", x = xr[2], y = 0.03, label = "Classified: will not vote", hjust = 1,
+           colour = "#8a5a10", fontface = "bold", size = 5.5) +
+  geom_line(stat = "function", fun = plogis, colour = col_ink, linewidth = 1.1) +
+  geom_point(aes(colour = factor(voted)), alpha = 0.45, size = 1.8,
+             position = position_jitter(width = 0, height = 0.015, seed = 1)) +
+  geom_hline(yintercept = 0.5, linetype = "dashed", linewidth = 1, colour = col_ink) +
+  annotate("text", x = xr[2], y = 0.535, label = "p = 0.5", hjust = 1, size = 5, colour = col_ink) +
+  scale_colour_manual(values = c(`0` = col_no, `1` = col_vote),
+                      labels = c("Actually didn't vote", "Actually voted"), name = NULL) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+  labs(x = "Log-odds from the full model", y = expression("Predicted P(vote), " * hat(p))) +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size = 4)))
+```
+:::
+::: {.column width="38%"}
+- **Binary classification**: Separate data into two distinct classes (i.e. will vote vs. will not vote)
+- Each dot is one person, placed on the model curve
+- **Rule:** predict "will vote" if $\hat{p} > 0.5$
+- Amber dots above the line and teal dots below it are **misclassified**
+:::
+::::
+
+::: notes
+~2 min. The x-axis is each person's linear predictor from the full model (age, education, party ID strength, income, married); the curve converts it into a predicted probability. Everyone above the dashed line is classified as a voter. Point out how few people fall below 0.5: because ~78% say they voted, the model rarely predicts "won't vote".
+:::
+
+## Classification: accuracy
+
+:::: {.columns}
+::: {.column width="45%"}
+```{r}
+#| label: confusion2
+#| echo: false
+cm <- table(Predicted = factor(pred$.fitted > 0.5, c(FALSE, TRUE), c("no", "vote")),
+            Actual    = factor(pred$voted, 0:1, c("no", "vote")))
+p1 <- pred$.fitted[pred$voted == 1]; p0 <- pred$.fitted[pred$voted == 0]
+auc <- mean(outer(p1, p0, ">") + 0.5 * outer(p1, p0, "=="))
+cmd <- as.data.frame.matrix(cm)
+kable(cbind(` ` = c("Predicted: no", "Predicted: vote"), cmd), col.names = c("", "Actual: no", "Actual: vote"),
+      caption = "Cut-off: predict 'vote' if p̂ > 0.5", row.names = FALSE)
+```
+:::
+::: {.column width="55%"}
+**Accuracy** = share classified correctly
+
+$$
+\begin{aligned}
+\text{Accuracy} &= \frac{\text{correct predictions}}{\text{total}} \\[4pt]
+&= \frac{`r cm["no", "no"]` + `r cm["vote", "vote"]`}{`r sum(cm)`} = `r r3(sum(diag(cm)) / sum(cm))`
+\end{aligned}
+$$
+:::
+::::
+
+- Accuracy `r pct(sum(diag(cm)) / sum(cm))`, but "everyone votes" gets `r pct(mean(vote$voted))`
+- The best threshold for classification depends on costs associated with false negatives vs. false positives 
+
+
+::: notes
+~2 min. Correct predictions are the diagonal of the table: non-voters predicted "no" plus voters predicted "vote". For a campaign deciding whom to remind to vote, missing non-voters might be the costlier error, so it would use a higher cut-off.
+:::
 
 ## Discrimination: ROC curve and AUC
 
@@ -936,6 +1015,7 @@ ggplot(roc, aes(fpr, tpr)) +
 - **AUC** = area under the curve
   - $P(\hat{p}_{\text{voter}} > \hat{p}_{\text{non-voter}})$
   - 0.5 = random, 1 = perfect
+- **AUC = `r r2(auc)`**: a random voter outranks a random non-voter `r pct(auc)` of the time
 :::
 ::::
 

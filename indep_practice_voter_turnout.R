@@ -1,5 +1,5 @@
 # Independent practice: Fitting logistic regression models with voter turnout 
-# data
+# data from GSSR
 
 # Load libraries
 library(magrittr)
@@ -45,4 +45,4 @@ gss    <- read_csv("gss_turnout.csv", show_col_types = FALSE)
 vote   <- gss %>% filter(year == 2024) %>% recode_gss()
 vote22 <- gss %>% filter(year == 2022) %>% recode_gss()
 
-# Your turn: fit models
+# Your turn to explore data and fit logistic regression models
