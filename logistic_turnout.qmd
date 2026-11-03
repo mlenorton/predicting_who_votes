@@ -1,0 +1,1011 @@
+---
+title: "Who Votes?"
+subtitle: "An introduction to logistic regression, using survey data on voter turnout"
+date: today
+date-format: "MMMM D, YYYY"
+format:
+  revealjs:
+    theme: [default, vote.scss]
+    css: fonts.css
+    width: 1280
+    height: 720
+    margin: 0.05
+    slide-number: c/t
+    footer: "Applied Statistics · Logistic regression"
+    transition: fade
+    transition-speed: fast
+    embed-resources: true
+    html-math-method: katex
+    code-overflow: wrap
+    code-line-numbers: false
+    fig-align: center
+    fig-dpi: 160
+    include-after-body: sticker.html
+execute:
+  echo: true
+  warning: false
+  message: false
+knitr:
+  opts_chunk:
+    dev: png
+    dev.args: { bg: "white" }
+    fig.width: 9
+    fig.height: 4.8
+---
+
+```{r}
+#| label: setup
+#| include: false
+library(magrittr)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(broom)
+library(knitr)
+options(width = 72)
+
+col_vote  <- "#00897B"   # teal  = voted
+col_no    <- "#C9771C"   # amber = did not vote
+col_ink   <- "#1F2A36"
+col_plum  <- "#6B5CA5"
+str_cols  <- c("Pure independent" = "#C9771C", "Leans to a party" = "#B7A6D6",
+               "Weak partisan" = "#6B5CA5", "Strong partisan" = "#00897B")
+
+theme_set(
+  theme_minimal(base_size = 19) +
+    theme(plot.title.position = "plot",
+          plot.title = element_text(face = "bold", colour = col_ink),
+          plot.subtitle = element_text(colour = "grey35"),
+          panel.grid.minor = element_blank(),
+          panel.grid.major = element_line(colour = "grey90"),
+          legend.position = "top", legend.justification = "left")
+)
+r2  <- function(x) formatC(x, digits = 2, format = "f")
+r3  <- function(x) formatC(x, digits = 3, format = "f")
+pct <- function(x, d = 0) paste0(formatC(100 * x, digits = d, format = "f"), "%")
+
+# Official turnout of the voting-eligible population (University of Florida Election Lab, v1.1)
+vep_2020 <- 0.6599
+vep_2022 <- 0.4591
+```
+
+```{r}
+#| label: data
+#| include: false
+# Build a small extract from the GSS the first time, then reuse it.
+if (!file.exists("gss_turnout.csv")) {
+  # install.packages("gssr", repos = c("https://kjhealy.r-universe.dev", "https://cloud.r-project.org"))
+  library(gssr)
+  data(gss_all)
+  gss_all %>%
+    haven::zap_labels() %>%
+    filter(year %in% c(2022, 2024), vote20 %in% 1:2) %>%   # 1 = voted, 2 = did not vote (ineligible dropped)
+    select(year, vote20, age, educ, degree, sex, marital, partyid, coninc, race, wtssps) %>%
+    write_csv("gss_turnout.csv")
+}
+
+recode_gss <- function(df) {
+  df %>%
+    mutate(
+      voted   = as.integer(vote20 == 1),
+      age10   = age / 10,
+      married = as.integer(marital == 1),
+      inc10k  = coninc / 10000,
+      degree  = factor(degree, 0:4, c("Less than HS", "High school", "Associate", "Bachelor's", "Graduate")),
+      # strength of party identification, folded (which party doesn't matter here)
+      pstrength = case_when(partyid == 3 ~ 0, partyid %in% c(2, 4) ~ 1,
+                            partyid %in% c(1, 5) ~ 2, partyid %in% c(0, 6) ~ 3)
+    ) %>%
+    select(voted, age, age10, educ, degree, inc10k, married, pstrength) %>%
+    drop_na()
+}
+
+gss    <- read_csv("gss_turnout.csv", show_col_types = FALSE)
+vote   <- gss %>% filter(year == 2024) %>% recode_gss()
+vote22 <- gss %>% filter(year == 2022) %>% recode_gss()
+```
+
+## Assumed knowledge
+
+- Familiarity with linear regression modeling
+- Familiarity with programming in R 
+
+## {.center}
+
+<span class="activity">Activity A · 2 min</span>
+
+### Two quick polls
+
+1. In the **2022 midterm**, what share of eligible Americans voted?<br>
+   **(a)** 30%  **(b)** 45%  **(c)** 60%  **(d)** 75%
+2. Which best predicts whether someone votes?<br>
+   age · education · income · strength of party ID
+
+::: notes
+~2 min. Show of hands or a quick online poll. Answer to Q1 is (b): 45.9% of the voting-eligible population (UF Election Lab). Don't reveal Q2; the models answer it later. Keep the framing neutral: we care about *whether* people vote, never *for whom*.
+:::
+
+## Today's question
+
+> **Who is likely to vote in today's midterm election?**
+
+. . .
+
+The response is **binary**: votes (1) or doesn't (0).
+
+. . .
+
+Today we'll learn:
+
+- **when** to use logistic regression
+- how to **fit** a logistic regression 
+- how to **interpret** the regression coefficients
+- how to **evaluate** the model 
+- how to make **predictions** 
+
+
+::: notes
+~1 min. Roadmap. The key new idea is modelling a probability. Also mention: understanding how the model is fit (no formula, an algorithm).
+:::
+
+## The data: General Social Survey 
+
+- Nationally representative survey of US adults (NORC), run every 1-2 years since 1972
+- Focused on tracking American public attitudes, behaviors, and attributes
+- Free in R via the [`gssr`](https://kjhealy.github.io/gssr/) package
+
+
+```{r}
+#| label: show-data
+#| eval: false
+library(gssr)                               # from kjhealy.r-universe.dev
+data(gss_all)                               # every GSS survey, 1972–2024
+dim(gss_all)
+```
+`dim(vote)`: **`r format(75699, big.mark = ",")` rows × `r 6942` columns**
+
+## Filter the data: General Social Survey 2024
+
+Question: Did you **vote in the 2020 presidential election**?
+
+
+```{r}
+#| label: filter-data
+#| eval: false     
+vote <- gss_all %>%
+  filter(year == 2024, vote20 %in% 1:2) %>% # 1 = voted, 2 = did not
+  mutate(voted = as.integer(vote20 == 1))
+```
+
+<div class="tiles">
+<div class="tile"><div class="big-number">`r format(nrow(vote), big.mark = ",")`</div><div class="lab">eligible respondents, complete answers</div></div>
+<div class="tile"><div class="big-number">`r pct(mean(vote$voted))`</div><div class="lab">say they voted in 2020</div></div>
+<div class="tile"><div class="big-number amber">`r pct(vep_2020)`</div><div class="lab">actually voted (official count)</div></div>
+</div>
+
+::: notes
+~2 min. Point out the gap between 78% and 66%. People over-report voting (it's socially desirable), and people who answer surveys are more civically engaged. Park this for the "what could go wrong?" brainstorm later. The full data-prep code is at the top of the .qmd.
+:::
+
+## Variables we'll use
+
+`dim(vote)`: **`r format(nrow(vote), big.mark = ",")` rows × `r ncol(vote)` columns**
+
+| Variable | Meaning | Values |
+|---|---|---|
+| `voted` | Voted in 2020? (**response**) | 0 / 1 |
+| `age`, `age10` | Age in years; age in decades | 18–89 |
+| `educ` | Years of schooling | 0–20 |
+| `degree` | Highest degree | 5 levels |
+| `inc10k` | Family income, in $10,000s | 0.04–17 |
+| `married` | Currently married? | 0 / 1 |
+| `pstrength` | Strength of party ID, *either* party | 0 = independent … 3 = strong |
+
+::: notes
+~1 min. pstrength folds the 7-point party ID scale: pure independents = 0, independents who lean to a party = 1, weak partisans = 2, strong partisans = 3. Direction (which party) is deliberately ignored.
+:::
+
+## A glimpse of the data
+
+```{r}
+#| label: glimpse
+glimpse(vote)
+```
+
+```{r}
+#| label: count
+vote %>% count(voted)
+```
+
+::: notes
+~1 min. Every row is one person. The response is coded 0/1, as glm() expects.
+:::
+
+## Who says they voted?
+
+```{r}
+#| label: plot-age-bins
+#| echo: false
+#| fig-height: 5
+vote %>%
+  mutate(age_group = cut(age, c(17, 24, 34, 44, 54, 64, 74, 90),
+                         labels = c("18–24", "25–34", "35–44", "45–54", "55–64", "65–74", "75+"))) %>%
+  group_by(age_group) %>%
+  summarise(rate = mean(voted)) %>%
+  ggplot(aes(age_group, rate)) +
+  geom_col(fill = col_vote, width = 0.7) +
+  geom_text(aes(label = pct(rate)), vjust = -0.4, colour = col_ink, size = 6.5) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+  labs(x = "Age group", y = "Said they voted")
+```
+
+::: notes
+~1 min. Ask: what shape is this? It rises then flattens. Probabilities can't go above 100%, so they *have* to flatten.
+:::
+
+## What happens if we fit a linear regression?
+
+```{r}
+#| label: plot-lm
+#| eval: false
+lpm <- lm(voted ~ age, data = vote)
+```
+
+:::: {.columns}
+::: {.column width="58%"}
+```{r}
+#| label: plot-lpm
+#| echo: false
+#| fig-width: 6.4
+#| fig-height: 5
+lpm <- lm(voted ~ age, data = vote)
+ggplot(vote, aes(age, voted)) +
+  annotate("rect", xmin = -Inf, xmax = Inf, ymin = 1, ymax = Inf, fill = col_no, alpha = 0.15) +
+  annotate("text", x = 20, y = 1.13, label = "impossible: p > 1", hjust = 0, colour = "#8a5a10", size = 5.5) +
+  geom_jitter(aes(colour = factor(voted)), height = 0.05, width = 0.3, alpha = 0.35, size = 1.2) +
+  geom_abline(intercept = coef(lpm)[1], slope = coef(lpm)[2], colour = col_ink, linewidth = 1.2) +
+  scale_colour_manual(values = c(`0` = col_no, `1` = col_vote), labels = c("Didn't vote", "Voted"), name = NULL) +
+  scale_x_continuous(limits = c(18, 100), breaks = seq(20, 100, 20)) +
+  scale_y_continuous(breaks = c(0, 0.5, 1), limits = c(-0.12, 1.2)) +
+  labs(x = "Age", y = "Voted (0/1)") +
+  guides(colour = guide_legend(override.aes = list(alpha = 1, size = 4)))
+```
+:::
+::: {.column width="42%"}
+```{r}
+#| label: lpm-multi
+#| include: false
+lpm_multi <- lm(voted ~ age + educ + pstrength + inc10k, data = vote)
+```
+
+::: {.fragment}
+1. **Impossible predictions**: when age > 88, fitted values exceed 1
+
+:::
+
+::: {.fragment}
+2. **Residuals not Normal**: $Y$ is 0 or 1
+
+:::
+
+::: {.fragment}
+3. **Variance changes** with $p = P(\text{vote})$
+
+:::
+
+::: {.fragment}
+4. **Wrong shape**: should flatten near $p=0$ and $p=1$
+
+:::
+:::
+::::
+
+::: notes
+~3 min. Ask students to spot problems *before* revealing the fragments. The straight-line version is the "linear probability model". The 4-predictor model is lm(voted ~ age + educ + pstrength + inc10k).
+:::
+
+## From probability to log-odds
+
+We need to transform $p$ to a variable that can take **any** value, like a linear model can.
+
+<div class="chain">
+<div class="box"><div class="name">Probability</div>$p$<div class="range">$[0,\ 1]$</div></div>
+<div class="arrow">→<small>divide by 1 − p</small></div>
+<div class="box"><div class="name">Odds</div>$\dfrac{p}{1-p}$<div class="range">$[0,\ \infty)$</div></div>
+<div class="arrow">→<small>take the log</small></div>
+<div class="box goal"><div class="name">Log-odds (logit)</div>$\log\!\left(\dfrac{p}{1-p}\right)$<div class="range">$(-\infty,\ \infty)$</div></div>
+</div>
+
+. . .
+
+A linear predictor also lives on $(-\infty, \infty)$, so we can set them equal:
+
+$$
+\text{logit}(p) = \log\!\left(\frac{p}{1-p}\right) = \beta_0 + \beta_1 x
+$$
+
+::: notes
+~2 min. Step 1 removes the upper bound of 1; step 2 removes the lower bound of 0. Now both sides of the equation have the same range, so nothing "impossible" can happen.
+:::
+
+## Examples: $p$, odds and log-odds
+
+```{r}
+#| label: odds-table
+#| echo: false
+tibble(
+  Situation = c("2022 midterm (official)", "2020 presidential (official)",
+                "2020, as reported in GSS", "Coin flip"),
+  p = c(vep_2022, vep_2020, mean(vote$voted), 0.5)
+) %>%
+  mutate(Odds = p / (1 - p), `Log-odds` = log(Odds)) %>%
+  kable(digits = 2, col.names = c("Turnout", "Probability", "Odds", "Log-odds"))
+```
+
+- $p = 0.5 \;\Leftrightarrow\;$ odds $= 1 \;\Leftrightarrow\;$ log-odds $= 0$
+- $p < 0.5 \;\Leftrightarrow\;$ negative log-odds
+- $p > 0.5 \;\Leftrightarrow\;$ positive log-odds
+
+::: notes
+~1 min. "Odds of 2" means twice as likely to vote as not, i.e. p = 2/3.
+:::
+
+## {.center}
+
+<span class="activity amber">Activity B · 2 min, pairs</span>
+
+### Odds speed round
+
+1. Odds of voting are **3 to 1**. Probability?
+2. Probability is **0.4**. Odds? Log-odds?
+3. Log-odds are **−1**. Probability?
+
+::: {.fragment}
+
+[(1) 3/4 = 0.75 · (2) odds 0.67, log-odds −0.41 · (3) e^−1^/(1 + e^−1^) ≈ 0.27]{.answer}
+
+:::
+
+::: notes
+~2 min including answers. Going back: p = odds/(1 + odds) = e^η/(1 + e^η).
+:::
+
+## The logistic regression model
+
+$$
+\log\!\left(\frac{p_i}{1-p_i}\right) = \beta_0 + \beta_1 x_i
+\quad\Longleftrightarrow\quad
+p_i = \frac{e^{\beta_0 + \beta_1 x_i}}{1 + e^{\beta_0 + \beta_1 x_i}}
+$$
+
+:::: {.columns}
+::: {.column width="55%"}
+```{r}
+#| label: plot-curve
+#| echo: false
+#| fig-width: 5.6
+#| fig-height: 3.8
+tibble(eta = seq(-6, 6, length.out = 300), p = plogis(eta)) %>%
+  ggplot(aes(eta, p)) +
+  geom_hline(yintercept = c(0, 1), linetype = "dashed", colour = "grey60") +
+  geom_line(colour = col_vote, linewidth = 1.6) +
+  annotate("point", x = 0, y = 0.5, size = 3.5, colour = col_ink) +
+  labs(x = expression(beta[0] + beta[1] * x ~ "(log-odds)"), y = "Probability p")
+```
+:::
+::: {.column width="45%"}
+- The **logit link** connects $p$ to the linear part
+- A **generalized linear model** (GLM) with Bernoulli $Y$
+- In R:
+
+```r
+glm(y ~ x, family = binomial)
+```
+:::
+::::
+
+::: notes
+~2 min. Compare with linear regression: Normal Y, identity link. Logistic: Bernoulli Y, logit link. Probit is another link you may meet; it gives a very similar S-curve.
+:::
+
+## Assumptions of logistic regression
+
+1. **Binary response**: $Y_i \sim \text{Bernoulli}(p_i)$
+2. **Independent** observations
+3. **Linear on the log-odds scale**
+4. No severe **multicollinearity**
+5. Enough events per predictor (≈ 10); no **perfect separation**
+
+**Not** needed: Normal residuals, constant variance
+
+::: notes
+~2 min. We have ~500 non-voters, plenty for 5 predictors. Perfect separation: a predictor that splits 0s and 1s exactly makes the estimate run off to infinity; R warns "fitted probabilities numerically 0 or 1".
+:::
+
+## How is it fit? No closed form
+
+- Linear regression has a formula: $\hat{\beta} = (X^{\top}X)^{-1}X^{\top}y$
+- Logistic regression **maximizes the log-likelihood**:
+
+$$
+\ell(\beta) = \sum_{i=1}^{n} \Big[ y_i \log p_i + (1 - y_i) \log(1 - p_i) \Big]
+$$
+
+- The equations are **non-linear in $\beta$**: no algebraic solution
+- R searches **iteratively** (algorithm: Iteratively re-weighted least squares (IRLS) / Newton–Raphson)
+
+::: notes
+~2 min. Each p_i depends on β through the logistic function. Setting the derivatives to zero gives Σ(y_i − p_i)x_i = 0, which can't be solved in closed form.
+:::
+
+## What R does: IRLS algorithm, step by step
+
+```{r}
+#| label: glm-age-irls
+#| eval: false
+glm_age <- glm(voted ~ age, family = binomial, data = vote)
+```
+
+```{r}
+#| label: irls
+#| echo: false
+X <- cbind(1, vote$age); y <- vote$voted; beta <- c(0, 0); hist <- list()
+for (i in 1:5) {
+  p <- plogis(drop(X %*% beta)); w <- p * (1 - p); z <- drop(X %*% beta) + (y - p) / w
+  beta <- drop(solve(t(X) %*% (w * X), t(X) %*% (w * z)))
+  pn <- plogis(drop(X %*% beta))
+  hist[[i]] <- tibble(Step = i, b0 = beta[1], b1 = beta[2],
+                      `Log-likelihood` = sum(y * log(pn) + (1 - y) * log(1 - pn)))
+}
+bind_rows(hist) %>% kable(digits = 4, col.names = c("Step", "β₀", "β₁ (age)", "Log-likelihood"))
+```
+
+Start at $\beta = (0, 0)$ → converged in ~4 steps, matching `glm()`.
+
+::: notes
+~1 min (optional if short on time). IRLS for voted ~ age written out by hand: each step is a weighted least-squares fit. summary() reports this as "Number of Fisher Scoring iterations". Next: students try to beat the algorithm.
+:::
+
+## {.smaller}
+
+<span class="activity">Activity C · 4 min, pairs</span> **Be the algorithm**: drag the sliders to maximize the log-likelihood.
+
+```{r}
+#| label: widget-data
+#| echo: false
+#| results: asis
+m_age <- glm(voted ~ age, family = binomial, data = vote)
+cat("<script>window.VOTE = ",
+    jsonlite::toJSON(list(x = vote$age, y = vote$voted,
+                          b0 = unname(coef(m_age)[1]), b1 = unname(coef(m_age)[2]),
+                          ll = as.numeric(logLik(m_age))),
+                     auto_unbox = TRUE, digits = 6), ";</script>", sep = "")
+```
+
+```{=html}
+<div class="vote-widget">
+  <div class="wctrl">
+    <div><label for="vb0">Intercept β₀ <span id="vb0v"></span></label>
+      <input type="range" id="vb0" min="-4" max="3" step="0.02" value="0"></div>
+    <div><label for="vb1">Slope β₁ (per year of age) <span id="vb1v"></span></label>
+      <input type="range" id="vb1" min="-0.06" max="0.12" step="0.001" value="0"></div>
+  </div>
+  <div class="readout">
+    <span class="pill">Log-likelihood: <strong id="vllv"></strong></span>
+    <span class="pill best">Your best: <strong id="vbestv"></strong></span>
+    <span class="pill" id="vmlepill" style="display:none">R: <strong id="vmlev"></strong></span>
+    <button id="vreveal">Reveal R's answer</button> <button id="vreset" class="ghost">Reset</button>
+  </div>
+  <svg id="vote-svg" viewBox="0 0 900 330" role="img" aria-label="Logistic curve fitted to turnout by age"></svg>
+</div>
+<script>
+(function () {
+  const D = window.VOTE; if (!D) return;
+  const W = 900, H = 330, m = {l: 78, r: 20, t: 28, b: 46}, X0 = 16, X1 = 92;
+  const FONT = 'Source Sans 3, Arial, sans-serif';
+  const xs = v => m.l + (v - X0) / (X1 - X0) * (W - m.l - m.r);
+  const ys = v => m.t + (1 - (v + 0.08) / 1.16) * (H - m.t - m.b);
+  const svg = document.getElementById('vote-svg'), NS = 'http://www.w3.org/2000/svg';
+  const el = (t, a) => { const e = document.createElementNS(NS, t); for (const k in a) e.setAttribute(k, a[k]); return e; };
+  let seed = 11; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  [0, 0.25, 0.5, 0.75, 1].forEach(v => {
+    svg.appendChild(el('line', {x1: m.l, x2: W - m.r, y1: ys(v), y2: ys(v), stroke: '#eee'}));
+    const t = el('text', {x: m.l - 8, y: ys(v) + 5, 'text-anchor': 'end', 'font-size': 15, fill: '#555', 'font-family': FONT}); t.textContent = v; svg.appendChild(t);
+  });
+  for (let a = 20; a <= 90; a += 10) { const t = el('text', {x: xs(a), y: H - m.b + 21, 'text-anchor': 'middle', 'font-size': 15, fill: '#555', 'font-family': FONT}); t.textContent = a; svg.appendChild(t); }
+  const xl = el('text', {x: (m.l + W - m.r) / 2, y: H - 3, 'text-anchor': 'middle', 'font-size': 17, fill: '#1F2A36', 'font-weight': 700, 'font-family': FONT}); xl.textContent = 'Age'; svg.appendChild(xl);
+  const yc = (m.t + H - m.b) / 2;
+  const yl = el('text', {x: 20, y: yc, 'text-anchor': 'middle', 'font-size': 17, fill: '#1F2A36', 'font-weight': 700, 'font-family': FONT, transform: `rotate(-90 20 ${yc})`}); yl.textContent = 'P(voted)'; svg.appendChild(yl);
+  D.x.forEach((x, i) => { const y = D.y[i];
+    svg.appendChild(el('circle', {cx: xs(x + (rnd() - 0.5) * 0.8), cy: ys(y + (rnd() - 0.5) * 0.1), r: 2.6,
+      fill: y ? '#00897B' : '#C9771C', 'fill-opacity': 0.35})); });
+  const mle = el('path', {fill: 'none', stroke: '#1F2A36', 'stroke-width': 2.5, 'stroke-dasharray': '7 6', opacity: 0});
+  const cur = el('path', {fill: 'none', stroke: '#6B5CA5', 'stroke-width': 4});
+  svg.appendChild(mle); svg.appendChild(cur);
+  const leg = el('text', {x: m.l + 4, y: 17, 'font-size': 15, fill: '#1F2A36', 'font-family': FONT}); leg.setAttribute('xml:space', 'preserve');
+  [['● ', '#00897B'], ['voted    ', '#1F2A36'], ['● ', '#C9771C'], ['didn’t vote    ', '#1F2A36'], ['— your curve    ', '#6B5CA5'], ['- - R’s answer', '#1F2A36']]
+    .forEach(([t, c]) => { const s = el('tspan', {fill: c}); s.textContent = t; leg.appendChild(s); });
+  svg.appendChild(leg);
+  const sig = z => 1 / (1 + Math.exp(-z));
+  const path = (a, b) => { let d = ''; for (let k = 0; k <= 200; k++) { const x = X0 + (X1 - X0) * k / 200; d += (k ? 'L' : 'M') + xs(x).toFixed(1) + ',' + ys(sig(a + b * x)).toFixed(1); } return d; };
+  const ll = (a, b) => D.x.reduce((s, x, i) => { const p = Math.min(Math.max(sig(a + b * x), 1e-12), 1 - 1e-12); return s + (D.y[i] ? Math.log(p) : Math.log(1 - p)); }, 0);
+  const s0 = document.getElementById('vb0'), s1 = document.getElementById('vb1'); let best = -Infinity;
+  function upd() { const a = +s0.value, b = +s1.value, L = ll(a, b);
+    document.getElementById('vb0v').textContent = a.toFixed(2); document.getElementById('vb1v').textContent = b.toFixed(3);
+    document.getElementById('vllv').textContent = L.toFixed(1); if (L > best) best = L;
+    document.getElementById('vbestv').textContent = best.toFixed(1); cur.setAttribute('d', path(a, b)); }
+  s0.addEventListener('input', upd); s1.addEventListener('input', upd);
+  document.getElementById('vreveal').addEventListener('click', () => { mle.setAttribute('d', path(D.b0, D.b1)); mle.setAttribute('opacity', 1);
+    document.getElementById('vmlepill').style.display = '';
+    document.getElementById('vmlev').textContent = D.ll.toFixed(1) + ' (β₀ = ' + D.b0.toFixed(2) + ', β₁ = ' + D.b1.toFixed(3) + ')'; });
+  document.getElementById('vreset').addEventListener('click', () => { s0.value = 0; s1.value = 0; best = -Infinity; mle.setAttribute('opacity', 0);
+    document.getElementById('vmlepill').style.display = 'none'; upd(); });
+  upd();
+})();
+</script>
+```
+
+::: notes
+~4 min. Students can open the HTML on their laptops and use the sliders too. Ask: should β₁ be positive or negative? What happens if the curve is too steep? You are doing by hand what IRLS does automatically: searching for the top of the hill.
+:::
+
+## Simple logistic regression: age
+
+$$
+\log\!\left(\frac{p_i}{1-p_i}\right) = \beta_0 + \beta_1\,\text{age}_i
+$$
+
+```{r}
+#| label: m-age
+m_age <- glm(voted ~ age, family = binomial, data = vote)
+tidy(m_age) %>%
+  mutate(p.value = format.pval(p.value, eps = 0.001, digits = 2)) %>%
+  kable(digits = 3)
+```
+
+```{r}
+#| include: false
+b <- coef(m_age)
+```
+
+Fitted: $\log\!\left(\dfrac{\hat{p}}{1-\hat{p}}\right) = `r r2(b[1])` + `r r3(b[2])`\,\text{age}$
+
+::: notes
+~2 min. Read the table like a linear regression table, but on the log-odds scale. The z statistic replaces t because inference is based on large-sample (Normal) theory.
+:::
+
+## Interpreting coefficient estimates
+
+$$
+\log\!\left(\frac{p}{1-p}\right) = \beta_0 + \beta_1 x
+$$
+
+- What does $\beta_0$ represent? 
+- How about $\beta_1$? 
+
+
+## Interpreting coefficient estimates 
+
+```{r}
+#| label: m-age-interp
+#| echo: false
+tidy(m_age) %>%
+  mutate(p.value = format.pval(p.value, eps = 0.001, digits = 2)) %>%
+  kable(digits = 3)
+```
+
+- At age = 0, the **log-odds** of voting are -0.582
+- When we increase age by one year, the **log-odds** of voting increases by `r r3(b[2])`
+- **Odds ratio:** $e^{`r r3(b[2])`} = `r r3(exp(b[2]))`$ per year
+- Per **decade**: $e^{10 \times `r r3(b[2])`} = `r r2(exp(10 * b[2]))`$, so **`r round(100 * (exp(10 * b[2]) - 1))`% higher odds**
+
+
+::: notes
+~2 min. The odds-ratio interpretation is constant; the change in probability isn't. The curve is steepest at p = 0.5, where its slope is β₁/4.
+:::
+
+<!-- ## One model, three scales -->
+
+<!-- ```{r} -->
+<!-- #| label: plot-scales -->
+<!-- #| echo: false -->
+<!-- #| fig-height: 4.6 -->
+<!-- #| fig-width: 11 -->
+<!-- grid3 <- tibble(age = 18:89) %>% -->
+<!--   mutate(eta = predict(m_age, newdata = .), p = plogis(eta), odds = exp(eta)) %>% -->
+<!--   pivot_longer(c(p, odds, eta), names_to = "scale", values_to = "value") %>% -->
+<!--   mutate(scale = factor(scale, c("p", "odds", "eta"), -->
+<!--                         c("Probability: S-curve", "Odds: exponential", "Log-odds: straight line"))) -->
+<!-- ggplot(grid3, aes(age, value)) + -->
+<!--   geom_line(colour = col_vote, linewidth = 1.5) + -->
+<!--   facet_wrap(~ scale, scales = "free_y") + -->
+<!--   labs(x = "Age", y = NULL) + -->
+<!--   theme(strip.text = element_text(face = "bold", size = 18)) -->
+<!-- ``` -->
+
+<!-- ::: notes -->
+<!-- ~1 min (optional). The same fitted model on each scale. Only on the log-odds scale is the relationship linear, which is exactly what the model assumes. -->
+<!-- ::: -->
+
+## The fitted curve vs. the data
+
+:::: {.columns}
+::: {.column width="60%"}
+```{r}
+#| label: plot-age-fit
+#| echo: false
+#| fig-width: 6.6
+#| fig-height: 5
+grid <- tibble(age = 18:89)
+fit <- augment(m_age, newdata = grid, type.predict = "link", se_fit = TRUE) %>%
+  mutate(p = plogis(.fitted), lo = plogis(.fitted - 1.96 * .se.fit), hi = plogis(.fitted + 1.96 * .se.fit))
+bins <- vote %>% mutate(b = cut(age, seq(17, 90, by = 6))) %>% group_by(b) %>%
+  summarise(age = mean(age), rate = mean(voted), n = n())
+ggplot() +
+  geom_jitter(data = vote, aes(age, voted, colour = factor(voted)), height = 0.04, width = 0.3, alpha = 0.25, size = 1) +
+  geom_ribbon(data = fit, aes(age, ymin = lo, ymax = hi), fill = col_vote, alpha = 0.18) +
+  geom_line(data = fit, aes(age, p), colour = col_vote, linewidth = 1.5) +
+  geom_point(data = bins, aes(age, rate, size = n), shape = 21, fill = "white", colour = col_ink, stroke = 1.1) +
+  scale_colour_manual(values = c(`0` = col_no, `1` = col_vote), guide = "none") +
+  scale_size_area(max_size = 6, guide = "none") +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "Age", y = "P(voted)", subtitle = "Circles = observed share, by age band")
+```
+:::
+::: {.column width="40%"}
+```{r}
+#| label: pred-age
+tibble(age = c(20, 50, 80)) %>%
+  mutate(p_hat = predict(m_age, .,
+                 type = "response"))
+```
+:::
+::::
+
+::: notes
+~2 min. The curve tracks the binned observed rates, but at 75+ the data level off more than the curve does. That's assumption 3 (linearity on the log-odds scale); age groups or a quadratic in age could fix it.
+:::
+
+<!-- ## A categorical predictor: education -->
+
+```{r}
+#| label: m-degree
+#| echo: false
+m_deg <- glm(voted ~ degree, family = binomial, data = vote)
+tidy(m_deg, exponentiate = TRUE, conf.int = TRUE) %>%
+  select(term, estimate, conf.low, conf.high) %>% kable(digits = 2)
+```
+
+<!-- - Odds ratios vs. the **reference group** (*Less than HS*) -->
+<!-- - Graduate degree: about **`r round(exp(coef(m_deg)["degreeGraduate"]))`×** the odds -->
+
+<!-- ::: notes -->
+<!-- ~2 min. Factor variables get one coefficient per non-reference level. The exponentiated intercept is the odds of voting in the reference group (`r r2(exp(coef(m_deg)[1]))`, i.e. p = `r pct(plogis(coef(m_deg)[1]))`). Changing the reference with relevel() changes the coefficients but not the fitted probabilities. -->
+<!-- ::: -->
+
+## {.center}
+
+<span class="activity plum">Activity D · 3 min, think–pair–share</span>
+
+### Being married
+
+```{r}
+#| label: m-married
+#| echo: false
+m_mar <- glm(voted ~ married, family = binomial, data = vote)
+bm1 <- coef(m_mar)
+```
+
+```{r}
+#| label: m-married-example
+m_mar <- glm(voted ~ married, family = binomial, data = vote)
+```
+
+```{r}
+#| label: m-married-output
+#| echo: false
+tidy(m_mar) %>%
+  mutate(p.value = format.pval(p.value, eps = 0.001, digits = 2)) %>%
+  kable(digits = 3)
+```
+
+1. Interpret the effect of marriage on probability of voting in 1-2 sentences.
+2. Does marriage *make* people vote? What are some possible explanations for what is observed?
+
+::: {.fragment}
+
+[Married respondents tend to be older, more educated and better off financially. Let's adjust for those…]{.answer}
+
+:::
+
+::: notes
+~3 min. Get students to name possible confounders (age, education, income) before moving on.
+:::
+
+## Multiple logistic regression
+
+$$
+\log\!\left(\frac{p_i}{1-p_i}\right) = \beta_0 + \beta_1\,\text{age10}_i + \beta_2\,\text{educ}_i + \dots + \beta_5\,\text{married}_i
+$$
+
+```{r}
+#| label: m-full
+m_full <- glm(voted ~ age10 + educ + inc10k + pstrength + married,
+              family = binomial, data = vote)
+```
+
+```{r}
+#| label: or-full
+#| echo: false
+lab <- c(age10 = "Age (per 10 years)", 
+         educ = "Education (per year)",
+         pstrength = "Party ID strength (per step)", 
+         inc10k = "Income (per $10k)",
+         married = "Married")
+bf <- coef(m_full)
+tidy(m_full, exponentiate = TRUE, conf.int = TRUE) %>%
+  filter(term != "(Intercept)") %>%
+  transmute(Predictor = lab[term], `Odds ratio` = estimate, `95% CI` = paste0(r2(conf.low), " – ", r2(conf.high)),
+            `p-value` = ifelse(p.value < 0.001, "< 0.001", r3(p.value))) %>%
+  kable(digits = 2)
+```
+
+::: notes
+~2 min. Every odds ratio is now "holding the other predictors constant".
+:::
+
+## Reading the multiple model
+
+- Each odds ratio: **holding the other predictors constant**
+- **Married:** `r r2(exp(bm1["married"]))` alone → `r r2(exp(bf["married"]))` adjusted, so mostly **confounding**
+- **Party ID strength:** ×`r r2(exp(bf["pstrength"]))` odds per step (either party)
+- Strong partisan vs. independent: $e^{3\beta} \approx `r round(exp(3 * bf["pstrength"]))`\times$ the odds
+
+::: notes
+~2 min. Answer to Activity A, Q2: party ID strength has the biggest effect. We use strength only, not which party, so the model is neutral about direction. These are associations in observational data, not causal effects.
+:::
+
+## Picturing "holding constant"
+
+```{r}
+#| label: plot-full
+#| echo: false
+#| fig-height: 5
+med <- vote %>% summarise(educ = median(educ), inc10k = median(inc10k))
+grid <- expand_grid(age = 18:89, pstrength = 0:3) %>%
+  mutate(age10 = age / 10, educ = med$educ, inc10k = med$inc10k, married = 0,
+         grp = factor(names(str_cols)[pstrength + 1], levels = names(str_cols)))
+grid$p <- predict(m_full, newdata = grid, type = "response")
+ggplot(grid, aes(age, p, colour = grp)) +
+  geom_line(linewidth = 1.6) +
+  geom_text(data = grid %>% filter(age == 18), aes(label = grp), hjust = 1, nudge_x = -1, size = 5.5, show.legend = FALSE) +
+  scale_colour_manual(values = str_cols, guide = "none") +
+  scale_x_continuous(limits = c(-8, 90), breaks = seq(20, 80, 20)) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+  labs(x = "Age", y = "Predicted P(voted)",
+       subtitle = paste0("Education ", med$educ, " years, median income, unmarried"))
+```
+
+::: notes
+~1 min. On the log-odds scale these are four parallel lines; on the probability scale, S-curves of the same shape, shifted. For different age effects by group we'd add an interaction (age10 * pstrength).
+:::
+
+
+<!-- ## {.center} -->
+
+<!-- <span class="activity amber">Activity E · 4 min, pairs</span> -->
+
+<!-- ### Predicting the upcoming midterm with this model: what could go wrong? -->
+
+<!-- ::: {.fragment} -->
+<!-- :::: {.columns} -->
+<!-- ::: {.column width="50%"} -->
+<!-- - **Self-reports**: 78% "voted" vs. 66% actual -->
+<!-- - **Who answers surveys**: the engaged -->
+<!-- - **Midterm ≠ presidential**: 46% vs. 66% -->
+<!-- ::: -->
+<!-- ::: {.column width="50%"} -->
+<!-- - **Timing**: 2024 income, party ID → 2020 vote -->
+<!-- - **Linearity**: levels off at older ages -->
+<!-- - **Independence**: clustered sampling -->
+<!-- ::: -->
+<!-- :::: -->
+<!-- ::: -->
+
+<!-- ::: notes -->
+<!-- ~4 min. Let pairs generate ideas, then reveal. Better data for prediction: *validated* turnout, i.e. surveys matched to official voter files, like the Cooperative Election Study (CES). -->
+<!-- ::: -->
+
+## Model evaluation and selection
+
+```{r}
+#| label: compare
+#| echo: false
+m_null <- glm(voted ~ 1, family = binomial, data = vote)
+m_ae   <- glm(voted ~ age10 + educ, family = binomial, data = vote)
+mods <- list("Null" = m_null, "Age" = m_age, "Degree" = m_deg,
+             "Age + education" = m_ae, "Full model" = m_full)
+tibble(Model = names(mods),
+       Deviance = sapply(mods, deviance),
+       AIC = sapply(mods, AIC)) %>%
+  kable(digits = 2)
+```
+
+```{r}
+#| label: lrt
+#| echo: false
+lrt <- anova(m_ae, m_full, test = "Chisq")
+```
+
+- **Deviance** $= -2\ell$ (where $\ell =$ log likelihood; lower is better)
+- **AIC** $= 2K -2\ell$ (i.e., penalizes parameters $K$)
+- **Likelihood ratio test** $= 2(\ell_{\text{full}} - \ell_{\text{reduced}})$ (drop in deviance; larger is better)
+- Compare `full` vs. `age + education` models: deviance drops `r round(lrt$Deviance[2])` on `r lrt$Df[2]` df, p `r format.pval(lrt[["Pr(>Chi)"]][2], eps = 0.001)`
+
+::: notes
+~2 min. The LRT is anova(m_ae, m_full, test = "Chisq"). McFadden's pseudo-R² is not comparable to linear-regression R²; 0.2–0.4 is considered a good fit.
+:::
+
+## Calibration
+
+:::: {.columns}
+::: {.column width="55%"}
+```{r}
+#| label: plot-calib
+#| echo: false
+#| fig-width: 5.4
+#| fig-height: 5
+pred <- augment(m_full, type.predict = "response")
+calib <- pred %>% mutate(g = ntile(.fitted, 8)) %>% group_by(g) %>%
+  summarise(predicted = mean(.fitted), observed = mean(voted), n = n())
+ggplot(calib, aes(predicted, observed)) +
+  geom_abline(linetype = "dashed", colour = "grey55") +
+  geom_point(size = 5, colour = col_vote) +
+  coord_equal(xlim = c(0.25, 1), ylim = c(0.25, 1)) +
+  scale_x_continuous(labels = scales::percent) + scale_y_continuous(labels = scales::percent) +
+  labs(x = "Predicted P(voted)", y = "Observed proportion who voted")
+```
+:::
+::: {.column width="45%"}
+- Split people into 8 groups by predicted probability
+- Compare observed vs. predicted share who voted
+- On the dashed line → observed = predicted → perfect calibration 
+:::
+::::
+
+::: notes
+~1 min. A formal version of this check is the Hosmer–Lemeshow test.
+:::
+
+<!-- ## Classification -->
+
+```{r}
+#| label: confusion
+#| echo: false
+cm <- table(Predicted = factor(pred$.fitted > 0.5, c(FALSE, TRUE), c("no", "vote")),
+            Actual    = factor(pred$voted, 0:1, c("no", "vote")))
+p1 <- pred$.fitted[pred$voted == 1]; p0 <- pred$.fitted[pred$voted == 0]
+auc <- mean(outer(p1, p0, ">") + 0.5 * outer(p1, p0, "=="))
+cmd <- as.data.frame.matrix(cm)
+kable(cbind(` ` = c("Predicted: no", "Predicted: vote"), cmd), col.names = c("", "Actual: no", "Actual: vote"),
+      caption = "Cut-off: predict 'vote' if p̂ > 0.5", row.names = FALSE)
+```
+
+<!-- - Accuracy `r pct(sum(diag(cm)) / sum(cm))`, but "everyone votes" gets `r pct(mean(vote$voted))` -->
+<!-- - Catches only `r pct(cm["no", "no"] / sum(cm[, "no"]))` of non-voters: the right cut-off depends on costs -->
+<!-- - **AUC = `r r2(auc)`**: a random voter outranks a random non-voter `r pct(auc)` of the time -->
+
+<!-- ::: notes -->
+<!-- ~2 min. For a campaign deciding whom to remind to vote, missing non-voters might be the costlier error, so it would use a higher cut-off. -->
+<!-- ::: -->
+
+## Discrimination: ROC curve and AUC
+
+:::: {.columns}
+::: {.column width="52%"}
+```{r}
+#| label: plot-roc
+#| echo: false
+#| fig-width: 5.2
+#| fig-height: 4.8
+roc <- tibble(cut = c(Inf, sort(unique(pred$.fitted), decreasing = TRUE), -Inf)) %>%
+  rowwise() %>%
+  mutate(tpr = mean(p1 >= cut), fpr = mean(p0 >= cut)) %>%
+  ungroup()
+at50 <- tibble(tpr = mean(p1 > 0.5), fpr = mean(p0 > 0.5))
+ggplot(roc, aes(fpr, tpr)) +
+  geom_ribbon(aes(ymin = 0, ymax = tpr), fill = col_vote, alpha = 0.15) +
+  geom_abline(linetype = "dashed", colour = "grey55") +
+  geom_step(colour = col_vote, linewidth = 1.4, direction = "vh") +
+  geom_point(data = at50, size = 4.5, colour = col_ink) +
+  annotate("text", x = at50$fpr + 0.02, y = at50$tpr - 0.13, label = "cut-off 0.5",
+           hjust = 0, size = 5.5, colour = col_ink) +
+  annotate("text", x = 0.62, y = 0.3, label = paste0("AUC = ", r2(auc)),
+           size = 7, fontface = "bold", colour = col_vote) +
+  annotate("text", x = 0.26, y = 0.3, label = "random guessing", angle = 45,
+           size = 4.5, colour = "grey45") +
+  coord_equal() +
+  labs(x = "False positive rate\n(non-voters predicted to vote)",
+       y = "True positive rate\n(voters predicted to vote)")
+```
+:::
+::: {.column width="48%"}
+- **Discrimination**: how well does the model *rank* voters above non-voters?
+- **ROC curve**: true vs. false positive rate for **every** cut-off
+- **AUC** = area under the curve
+  - $P(\hat{p}_{\text{voter}} > \hat{p}_{\text{non-voter}})$
+  - 0.5 = random, 1 = perfect
+:::
+::::
+
+::: notes
+~2 min. Each point on the curve is one cut-off: as the cut-off falls from 1 to 0, the model predicts "vote" for more people, catching more voters (up) but also more non-voters (right). The black dot is the 0.5 cut-off from the previous slide. AUC summarises the whole curve in one number and doesn't depend on any cut-off: pick a random voter and a random non-voter; AUC is the probability the model gives the voter the higher predicted probability. Here AUC = `r r2(auc)`. Discrimination (ranking) is different from calibration (are the probabilities right?): a model can rank well but be badly calibrated, or vice versa.
+:::
+
+## A fairer approach to model evaluation: Use new data
+
+Apply the 2024 model to **2022** GSS respondents:
+
+```{r}
+#| label: oos
+vote22$p_hat <- predict(m_full, newdata = vote22, type = "response")
+```
+
+```{r}
+#| label: oos-summary
+#| echo: false
+q1 <- vote22$p_hat[vote22$voted == 1]; q0 <- vote22$p_hat[vote22$voted == 0]
+auc22 <- mean(outer(q1, q0, ">") + 0.5 * outer(q1, q0, "=="))
+```
+
+<div class="tiles">
+<div class="tile"><div class="big-number">`r format(nrow(vote22), big.mark = ",")`</div><div class="lab">new respondents</div></div>
+<div class="tile"><div class="big-number">`r pct(mean(vote22$p_hat))`</div><div class="lab">average prediction (`r pct(mean(vote22$voted))` said they voted)</div></div>
+<div class="tile"><div class="big-number">`r r2(auc22)`</div><div class="lab">AUC on new data (`r r2(auc)` before)</div></div>
+</div>
+
+::: notes
+~1 min. The model holds up out of sample. But both samples share the same self-report bias, so "holding up" means predicting what people *say*.
+:::
+
+
+## Review
+
+- When to use logistic regression
+  - **Binary response** 
+  - Linear on the **log-odds** scale; S-curve for $p$
+- How to fit the model
+  - $\text{logit}(p) = \beta_0 + \beta_1X_1 + \dots \beta_kX_k$
+  - glm(Y ~ X, family = binomial, data = data)
+  - No closed form solution → R uses IRLS algorithm
+
+## Review - Continued
+
+- Interpretation of coefficients
+  - $\beta_0$ = **log odds** when $X$ = 0
+  - $\beta_1$ = **change in log odds** associated with a 1 unit increase in $X_1$, holding all else constant 
+  - $e^{\beta}$ = **odds ratio**
+- Model evaluation
+  - Deviance, AIC, Likelihood ratio test
+  - Calibration
+  - Discrimination
+
+::: notes
+~1 min.
+:::
+
+## Independent practice
+
+1. Fit your own model(s) and predict who will vote today!
+2. What are the most important predictors in your model? Interpret the coefficients for a general audience. 
+
+
+## Data & sources {.smaller}
+
+- **Survey data:** General Social Survey (NORC at the University of Chicago), 2022 and 2024; variable `vote20`. Via the [`gssr`](https://kjhealy.github.io/gssr/) R package.
+- **Official turnout:** UF Election Lab, [1980–2022 General Election Turnout Rates (v1.1)](https://election.lab.ufl.edu/dataset/1980-2022-general-election-turnout-rates-v1-1): `r pct(vep_2020, 1)` (2020), `r pct(vep_2022, 1)` (2022).
+- **Validated turnout:** [Cooperative Election Study](https://tischcollege.tufts.edu/research-faculty/research-centers/cooperative-election-study/data-downloads).
+- Analysis is unweighted for simplicity.
+
+[Built with R `r getRversion()` and Quarto. Press **S** for speaker notes.]{.muted .small}

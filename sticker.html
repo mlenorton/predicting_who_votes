@@ -1,0 +1,21 @@
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  var t = document.getElementById("title-slide");
+  if (!t) return;
+  var d = document.createElement("div");
+  d.className = "sticker";
+  d.setAttribute("aria-hidden", "true");
+  d.innerHTML =
+    '<svg viewBox="0 0 300 300" xmlns="http://www.w3.org/2000/svg">' +
+    '<defs><path id="arcTop" d="M 50 150 A 100 100 0 0 1 250 150"/><path id="arcBot" d="M 62 160 A 88 88 0 0 0 238 160"/></defs>' +
+    '<circle cx="150" cy="150" r="140" fill="#FFFFFF" stroke="#1F2A36" stroke-opacity=".12" stroke-width="2"/>' +
+    '<circle cx="150" cy="150" r="128" fill="none" stroke="#00897B" stroke-width="10"/>' +
+    '<circle cx="150" cy="150" r="113" fill="none" stroke="#C9771C" stroke-width="3" stroke-dasharray="2 9" stroke-linecap="round"/>' +
+    '<text font-family="Source Sans 3, Arial, sans-serif" font-weight="700" font-size="27" fill="#1F2A36" letter-spacing="2"><textPath href="#arcTop" startOffset="50%" text-anchor="middle">WHO WILL VOTE?</textPath></text>' +
+    '<text font-family="Source Sans 3, Arial, sans-serif" font-weight="700" font-size="17" fill="#5E6B78" letter-spacing="4"><textPath href="#arcBot" startOffset="50%" text-anchor="middle">P(Y = 1 | x)</textPath></text>' +
+    '<rect x="112" y="112" width="76" height="76" rx="10" fill="none" stroke="#1F2A36" stroke-width="7"/>' +
+    '<path d="M124 152 L143 172 L182 120" fill="none" stroke="#00897B" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>' +
+    '</svg>';
+  t.appendChild(d);
+});
+</script>

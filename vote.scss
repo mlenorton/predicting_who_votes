@@ -1,0 +1,121 @@
+/*-- scss:defaults --*/
+
+// Neutral palette: deliberately avoids party colours (no red/blue pairing).
+$ink:     #1F2A36;
+$teal:    #00897B;   // voted
+$amber:   #B5650F;   // did not vote (text-safe on white)
+$plum:    #6B5CA5;
+$muted:   #5E6B78;
+$rule:    #E3E6EA;
+
+$body-bg:    #FFFFFF;
+$body-color: $ink;
+$link-color: $teal;
+$selection-bg: rgba($teal, .25);
+
+$font-family-sans-serif: "Source Sans 3", "Helvetica Neue", Arial, sans-serif;
+$presentation-heading-font: "Source Sans 3", "Helvetica Neue", Arial, sans-serif;
+$presentation-heading-color: $ink;
+$presentation-heading-font-weight: 700;
+$presentation-font-size-root: 38px;
+$presentation-h2-font-size: 1.3em;
+$presentation-h3-font-size: 1.05em;
+$presentation-line-height: 1.3;
+
+$code-block-bg: #F7F8FA;
+$code-block-border-color: $rule;
+$code-color: #8A4B0F;
+$code-block-font-size: 0.62em;
+
+/*-- scss:rules --*/
+
+.reveal { font-family: $font-family-sans-serif; }
+
+.reveal h2 {
+  letter-spacing: -0.005em;
+  padding-bottom: .15em;
+  border-bottom: 3px solid rgba($teal, .35);
+  margin-bottom: .5em;
+}
+.reveal h3 { color: $teal; font-weight: 700; }
+.reveal h2:empty { display: none; }
+
+.reveal .slide ul { padding-left: 1.1em; }
+.reveal .slide li { margin-bottom: .3em; }
+.reveal .slide ul > li::marker { color: $teal; }
+.reveal .slide ol > li::marker { color: $teal; font-weight: 700; }
+
+.reveal strong { color: darken($ink, 5%); }
+.muted   { color: $muted; }
+.answer  { color: $plum; font-style: italic; }
+.big-number { font-weight: 700; font-size: 2.2em; line-height: 1; color: $teal; }
+.big-number.amber { color: $amber; }
+.small { font-size: .75em; }
+
+// Title slide
+#title-slide {
+  text-align: left;
+  .title { font-size: 2.3em; line-height: 1.05; max-width: 68%; font-weight: 700; }
+  .subtitle { color: $teal; font-size: 1.05em; margin-top: .35em; max-width: 68%; font-weight: 400; }
+  .date { color: $muted; font-size: .65em; }
+}
+.sticker { position: absolute; right: 2%; top: 14%; width: 290px; height: 290px; }
+
+// Activity banner
+.activity {
+  display: inline-block; font-weight: 700; font-size: .55em;
+  letter-spacing: .06em; text-transform: uppercase; color: #fff; background: $teal;
+  border-radius: 999px; padding: .2em .9em; margin-bottom: .3em;
+}
+.activity.amber { background: $amber; }
+.activity.plum  { background: $plum; }
+
+// Probability -> odds -> log-odds chain
+.chain { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; align-items: stretch; gap: .3em; margin-top: .3em; }
+.chain .box { border: 2px solid $rule; border-radius: 14px; padding: .45em .5em; text-align: center; background: #fff; }
+.chain .box .name { font-weight: 700; font-size: .85em; }
+.chain .box .range { margin-top: .25em; font-size: .9em; color: $teal; font-weight: 700; }
+.chain .box.goal { border-color: $teal; background: rgba($teal, .06); }
+.chain .arrow { align-self: center; font-size: 1.2em; color: $muted; text-align: center; line-height: 1.1; }
+.chain .arrow small { display: block; font-size: .42em; color: $muted; }
+
+// Tables
+.reveal table { font-size: .62em; border-collapse: collapse; margin: .3em auto; }
+.reveal table th { background: rgba($teal, .1); font-weight: 700; border-bottom: 2px solid rgba($ink, .25) !important; }
+.reveal table td, .reveal table th { padding: .25em .65em !important; }
+.reveal table tr:nth-child(even) td { background: rgba($ink, .03); }
+
+// Code
+.reveal div.sourceCode { border-radius: 8px; border-left: 4px solid $teal; }
+.reveal .cell-output pre code { font-size: .95em; }
+.reveal pre code { max-height: 460px; }
+
+// Figures
+.reveal .cell-output-display img { border-radius: 8px; }
+
+// KaTeX a touch larger than body text for legibility
+.reveal .katex { font-size: 1.05em; }
+
+// Slider widget
+.vote-widget {
+  background: #fff; border: 2px solid $rule; border-radius: 12px; padding: .4em .6em .2em; font-size: .62em;
+  .wctrl { display: grid; grid-template-columns: 1fr 1fr; gap: .1em 1.4em; }
+  label { font-weight: 700; display: flex; justify-content: space-between; }
+  input[type=range] { width: 100%; accent-color: $teal; }
+  .readout { display: flex; flex-wrap: wrap; gap: .3em .8em; margin-top: .2em; align-items: center; }
+  .pill { background: rgba($ink, .06); border-radius: 999px; padding: .05em .7em; }
+  .best { background: rgba($teal, .15); }
+  button { border: 0; border-radius: 999px; padding: .15em .9em; font-weight: 700; background: $teal; color: #fff; cursor: pointer; font-size: 1em; font-family: inherit; }
+  button.ghost { background: rgba($ink, .08); color: $ink; }
+  svg { width: 100%; height: auto; display: block; }
+}
+
+// Tiles
+.tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5em; margin-top: .3em; }
+.tile { background: #fff; border: 2px solid $rule; border-radius: 12px; padding: .4em .6em; }
+.tile .lab { font-size: .55em; color: $muted; line-height: 1.2; margin-top: .2em; }
+
+.reveal .footer { font-size: .4em; color: $muted; }
+.reveal .slide-number { background: transparent; color: $muted; font-size: .5em; }
+
+.reveal .columns .column > ul { font-size: .9em; }
